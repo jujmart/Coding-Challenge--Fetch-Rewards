@@ -1,46 +1,100 @@
 from flask import Flask, request
 import re
+import json
+import datetime
 
 app = Flask(__name__)
 
 point_transactions = []
+balance = {}
 
 
-def timestamp_to_seconds(timestamp):
+def timestamp_conversion(timestamp):
     date_time_split = re.split(r"[-:TZ]", timestamp)
+    date = datetime.datetime(int(date_time_split[0]), int(date_time_split[1]), int(date_time_split[2]),
+                             int(date_time_split[3]), int(date_time_split[4]), int(date_time_split[5]))
+    return date
 
-    year_diff = int(date_time_split[0]) - 2020
-    year_diff_in_seconds = year_diff * 365 * 24 * 60 * 60
 
-    month_diff = int(date_time_split[1]) - 1
-    month_diff_in_seconds = month_diff * 30 * 24 * 60 * 60
-
-    day_diff = int(date_time_split[2]) - 1
-    day_diff_in_seconds = day_diff * 24 * 60 * 60
-
-    hour_diff = int(date_time_split[3])
-    hour_diff_in_seconds = hour_diff * 60 * 60
-
-    minute_diff = int(date_time_split[4])
-    minute_diff_in_seconds = minute_diff * 60
-
-    second_diff = int(date_time_split[5])
-
-    return (year_diff_in_seconds + month_diff_in_seconds + day_diff_in_seconds +
-            hour_diff_in_seconds + minute_diff_in_seconds + second_diff)
+def timestamp_seconds_sorting(transaction):
+    return transaction["timestamp"]
 
 
 @app.route("/add-points", methods=["POST"])
 def add_points():
     transaction = request.json
-    transaction_time = timestamp_to_seconds(transaction.timestamp)
-    transaction.timestamp = transaction_time
-    if len(point_transactions) == 0 or transaction_time > point_transactions[-1].timestamp:
-        point_transactions.append(transaction)
-        return
+    transaction_time = timestamp_conversion(transaction["timestamp"])
+    transaction["timestamp"] = transaction_time
+    point_transactions.append(transaction)
 
-    inserted = False
+    if balance.get(transaction["payer"]):
+        balance[transaction["payer"]] += transaction["points"]
+    else:
+        balance[transaction["payer"]] = transaction["points"]
+
+    balance[transaction["payer"]] = max(balance[transaction["payer"]], 0)
+
+    if len(point_transactions) <= 1 or transaction_time >= point_transactions[-2]["timestamp"]:
+        print(point_transactions)
+        print("**********************")
+        print(balance)
+        return {}
+
+    point_transactions.sort(key=timestamp_seconds_sorting)
+    print(point_transactions)
+    print("**********************")
+    print(balance)
+    return {}
+
+
+@app.route("/spend-points", methods=["POST"])
+def spend_points():
+    desired_points = request.json["points"]
+    total_points = 0
+    payer_lst = []
     current_idx = 0
-    while not inserted:
-        pass
-    return
+
+    while total_points < desired_points:
+        if current_idx >= len(point_transactions):
+            break
+
+        current = point_transactions[current_idx]
+
+        if current["points"] < 0:
+            current_idx += 1
+            continue
+
+        negative_points = 0
+        for i in range(current_idx + 1, len(point_transactions)):
+            if point_transactions[i]["payer"] != current["payer"] or point_transactions[i]["points"] > 0:
+                continue
+
+            negative_points += point_transactions[i]["points"]
+
+        if current["points"] >= negative_points:
+            remaining_points = min(
+                current["points"] + negative_points, desired_points - total_points)
+            point_transactions.append({
+                "payer": current["payer"],
+                "points": -remaining_points,
+                "timestamp": datetime.datetime.now()
+            })
+            payer_lst.append({
+                "payer": current["payer"],
+                "points": -remaining_points
+            })
+            balance[current["payer"]] -= remaining_points
+            total_points += remaining_points
+            current_idx += 1
+            continue
+
+    point_transactions.sort(key=timestamp_seconds_sorting)
+    print(point_transactions)
+    print("**********************")
+    print(balance)
+    return json.dumps(payer_lst)
+
+
+@app.route("/points-balance")
+def points_balance():
+    return balance
